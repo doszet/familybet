@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "db:init": "wrangler d1 execute family-bet --remote --file=./schema.sql",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "deploy": "npm run build && wrangler pages deploy dist --project-name family-bet"
+    "deploy": "npm run db:init && npm run build && wrangler pages deploy dist --project-name family-bet"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",
