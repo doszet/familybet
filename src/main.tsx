@@ -67,6 +67,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [playerName, setPlayerName] = useState("");
   const [matchForm, setMatchForm] = useState({ home_team: "", away_team: "" });
+  const [collapseUpcoming, setCollapseUpcoming] = useState(false);
 
   async function load() {
     try {
@@ -192,14 +193,6 @@ function App() {
       {message && <div className="notice">{message}</div>}
 
       <section className="grid top-grid">
-        <form className="panel" onSubmit={submitPlayer}>
-          <h2>Dodaj zawodnika</h2>
-          <div className="inline-form">
-            <input value={playerName} onChange={(e) => setPlayerName(e.target.value)} placeholder="Imie" />
-            <button disabled={busy}>Dodaj</button>
-          </div>
-        </form>
-
         <form className="panel" onSubmit={submitMatch}>
           <h2>Dodaj mecz</h2>
           <div className="match-inputs">
@@ -253,8 +246,17 @@ function App() {
 
       <section className="panel">
         <div className="section-head">
-          <h2>Nadchodzace mecze</h2>
-          <span>{nextMatches.length} do typowania</span>
+          <div>
+            <h2>Nadchodzace mecze</h2>
+            <span>{nextMatches.length} do typowania</span>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => setCollapseUpcoming((current) => !current)}
+          >
+            {collapseUpcoming ? "Rozwin wszystkie" : "Zwin wszystkie"}
+          </button>
         </div>
         <div className="cards">
           {nextMatches.map((match) => (
@@ -264,6 +266,7 @@ function App() {
               players={data.players}
               predictions={data.predictions.filter((prediction) => prediction.match_id === match.id)}
               disabled={busy}
+              collapsed={collapseUpcoming}
               onSave={saveMatchPredictions}
               onResult={saveResult}
             />
@@ -274,8 +277,10 @@ function App() {
 
       <section className="panel">
         <div className="section-head">
-          <h2>Historia</h2>
-          <span>{finishedMatches.length} zakonczonych</span>
+          <div>
+            <h2>Historia</h2>
+            <span>{finishedMatches.length} zakonczonych</span>
+          </div>
         </div>
         <div className="history">
           {finishedMatches.map((match) => (
@@ -292,8 +297,14 @@ function App() {
 
       <section className="panel">
         <div className="section-head">
-          <h2>Lista zawodnikow</h2>
-          <span>{data.players.length} osob</span>
+          <div>
+            <h2>Lista zawodnikow</h2>
+            <span>{data.players.length} osob</span>
+          </div>
+          <form className="inline-form compact" onSubmit={submitPlayer}>
+            <input value={playerName} onChange={(e) => setPlayerName(e.target.value)} placeholder="Imie" />
+            <button disabled={busy}>+</button>
+          </form>
         </div>
         <div className="players-list">
           {data.players.map((player) => (
@@ -311,6 +322,7 @@ function PredictionCard({
   players,
   predictions,
   disabled,
+  collapsed,
   onSave,
   onResult,
 }: {
@@ -318,12 +330,14 @@ function PredictionCard({
   players: Player[];
   predictions: Prediction[];
   disabled: boolean;
+  collapsed: boolean;
   onSave: (matchId: number, predictions: Array<{ player_id: number; home_score: string; away_score: string }>) => void;
   onResult: (matchId: number, home: string, away: string) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<number, { home: string; away: string }>>({});
   const [resultHome, setResultHome] = useState(match.home_score?.toString() ?? "");
   const [resultAway, setResultAway] = useState(match.away_score?.toString() ?? "");
+  const [open, setOpen] = useState(!collapsed);
 
   useEffect(() => {
     const nextDrafts: Record<number, { home: string; away: string }> = {};
@@ -342,82 +356,110 @@ function PredictionCard({
     setResultAway(match.away_score?.toString() ?? "");
   }, [match.home_score, match.away_score]);
 
+  useEffect(() => {
+    setOpen(!collapsed);
+  }, [collapsed]);
+
+  const betCount = players.filter((player) => {
+    const draft = drafts[player.id];
+    return Boolean(draft?.home !== "" && draft?.away !== "");
+  }).length;
+
   return (
-    <article className="match-card">
-      <div className="match-header">
+    <details className="match-card" open={open} onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}>
+      <summary className="match-summary">
         <div className="match-main">
           <strong>
             {match.home_team} - {match.away_team}
           </strong>
+          <span>
+            {betCount}/{players.length} osob zrobilo beta
+          </span>
         </div>
-        <div className="result-form">
-          <span>Wynik meczu</span>
-          <input min="0" type="number" value={resultHome} onChange={(e) => setResultHome(e.target.value)} />
-          <span>:</span>
-          <input min="0" type="number" value={resultAway} onChange={(e) => setResultAway(e.target.value)} />
-          <button type="button" onClick={() => onResult(match.id, resultHome, resultAway)}>
-            Zakoncz
-          </button>
+        <div className="match-summary-right">
+          <b>{match.home_score !== null && match.away_score !== null ? `${match.home_score}:${match.away_score}` : "w trakcie"}</b>
         </div>
-      </div>
-      <div className="prediction-list">
-        {players.map((player) => {
-          const draft = drafts[player.id] ?? { home: "", away: "" };
-          return (
-            <div key={player.id} className="prediction-row">
-              <strong>{player.name}</strong>
-              <div className="score-form">
-                <input
-                  min="0"
-                  type="number"
-                  value={draft.home}
-                  onChange={(e) =>
-                    setDrafts((current) => ({
-                      ...current,
-                      [player.id]: { ...(current[player.id] ?? { home: "", away: "" }), home: e.target.value },
-                    }))
-                  }
-                />
-                <span>:</span>
-                <input
-                  min="0"
-                  type="number"
-                  value={draft.away}
-                  onChange={(e) =>
-                    setDrafts((current) => ({
-                      ...current,
-                      [player.id]: { ...(current[player.id] ?? { home: "", away: "" }), away: e.target.value },
-                    }))
-                  }
-                />
+      </summary>
+      <div className="match-body">
+        <div className="match-header">
+          <div className="match-main">
+            <strong>
+              {match.home_team} - {match.away_team}
+            </strong>
+          </div>
+          <div className="result-form">
+            <span>Wynik meczu</span>
+            <input min="0" type="number" value={resultHome} onChange={(e) => setResultHome(e.target.value)} />
+            <span>:</span>
+            <input min="0" type="number" value={resultAway} onChange={(e) => setResultAway(e.target.value)} />
+            <button type="button" onClick={() => onResult(match.id, resultHome, resultAway)}>
+              Zakoncz
+            </button>
+          </div>
+        </div>
+        <div className="prediction-list">
+          {players.map((player) => {
+            const draft = drafts[player.id] ?? { home: "", away: "" };
+            return (
+              <div key={player.id} className="prediction-row">
+                <strong>{player.name}</strong>
+                <div className="score-form">
+                  <input
+                    min="0"
+                    type="number"
+                    value={draft.home}
+                    onChange={(e) =>
+                      setDrafts((current) => ({
+                        ...current,
+                        [player.id]: { ...(current[player.id] ?? { home: "", away: "" }), home: e.target.value },
+                      }))
+                    }
+                  />
+                  <span>:</span>
+                  <input
+                    min="0"
+                    type="number"
+                    value={draft.away}
+                    onChange={(e) =>
+                      setDrafts((current) => ({
+                        ...current,
+                        [player.id]: { ...(current[player.id] ?? { home: "", away: "" }), away: e.target.value },
+                      }))
+                    }
+                  />
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          className="save-match"
+          disabled={disabled}
+          onClick={() => onSave(match.id, Object.entries(drafts).map(([player_id, score]) => ({ player_id: Number(player_id), home_score: score.home, away_score: score.away })))}
+        >
+          Zapisz typy dla meczu
+        </button>
       </div>
-      <button
-        type="button"
-        className="save-match"
-        disabled={disabled}
-        onClick={() => onSave(match.id, Object.entries(drafts).map(([player_id, score]) => ({ player_id: Number(player_id), home_score: score.home, away_score: score.away })))}
-      >
-        Zapisz typy dla meczu
-      </button>
-    </article>
+    </details>
   );
 }
 
 function HistoryMatch({ match, predictions, players }: { match: Match; predictions: Prediction[]; players: Player[] }) {
   const [open, setOpen] = useState(false);
   const result = match.home_score !== null && match.away_score !== null ? { home: match.home_score, away: match.away_score } : null;
+  const betCount = players.filter((player) => predictions.some((item) => item.player_id === player.id)).length;
 
   return (
     <details className="history-row" open={open} onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}>
       <summary className="history-summary">
-        <div>
+        <div className="history-main">
           <strong>
             {match.home_team} - {match.away_team}
           </strong>
+          <span>
+            {betCount}/{players.length} typow
+          </span>
         </div>
         <b>{result ? `${result.home}:${result.away}` : "brak wyniku"}</b>
       </summary>
