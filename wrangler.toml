@@ -5,4 +5,4 @@ compatibility_date = "2026-06-14"
 [[d1_databases]]
 binding = "DB"
 database_name = "family-bet"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "302cd77c-f052-4af3-aa92-54964afe405f"
