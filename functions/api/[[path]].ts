@@ -62,13 +62,13 @@ async function addPlayer(request: Request, db: D1Database) {
 }
 
 async function addMatch(request: Request, db: D1Database) {
-  const body = await readBody<{ home_team?: string; away_team?: string; starts_at?: string }>(request);
+  const body = await readBody<{ home_team?: string; away_team?: string }>(request);
   const home = body.home_team?.trim();
   const away = body.away_team?.trim();
-  if (!home || !away || !body.starts_at) return bad("Uzupelnij obie druzyny i date meczu");
+  if (!home || !away) return bad("Uzupelnij obie druzyny");
   await db
     .prepare("INSERT INTO matches (home_team, away_team, starts_at) VALUES (?, ?, ?)")
-    .bind(home, away, new Date(body.starts_at).toISOString())
+    .bind(home, away, new Date().toISOString())
     .run();
   return json({ ok: true }, 201);
 }

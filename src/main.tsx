@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
@@ -6,12 +6,13 @@ import "./style.css";
 type Player = { id: number; name: string; created_at: string };
 type Match = {
   id: number;
+  external_id: string | null;
   home_team: string;
   away_team: string;
+  starts_at: string;
   status: "scheduled" | "finished";
   home_score: number | null;
   away_score: number | null;
-  created_at: string;
 };
 type Prediction = {
   id: number;
@@ -20,7 +21,6 @@ type Prediction = {
   home_score: number;
   away_score: number;
   points: number;
-  created_at: string;
 };
 type Standing = {
   player_id: number;
@@ -34,67 +34,46 @@ type AppState = {
   players: Player[];
   matches: Match[];
   predictions: Prediction[];
+  standings: Standing[];
 };
 
-const storageKey = "family-bet-local-v1";
+const emptyState: AppState = {
+  players: [],
+  matches: [],
+  predictions: [],
+  standings: [],
+};
 
-function loadState(): AppState {
-  try {
-    const raw = localStorage.getItem(storageKey);
-    if (!raw) return { players: [], matches: [], predictions: [] };
-    return JSON.parse(raw) as AppState;
-  } catch {
-    return { players: [], matches: [], predictions: [] };
+async function api<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`/api/${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: "Blad API" }));
+    throw new Error(error.error || "Nie udalo sie zapisac danych");
   }
-}
-
-function saveState(state: AppState) {
-  localStorage.setItem(storageKey, JSON.stringify(state));
-}
-
-function scoreOutcome(home: number, away: number) {
-  return Math.sign(home - away);
-}
-
-function pointsFor(pickHome: number, pickAway: number, home: number | null, away: number | null) {
-  if (home === null || away === null) return 0;
-  if (pickHome === home && pickAway === away) return 3;
-  return scoreOutcome(pickHome, pickAway) === scoreOutcome(home, away) ? 1 : 0;
+  return res.json();
 }
 
 function App() {
-  const [data, setData] = useState<AppState>({ players: [], matches: [], predictions: [] });
+  const [data, setData] = useState<AppState>(emptyState);
   const [activePlayer, setActivePlayer] = useState<number | "">("");
-  const [message, setMessage] = useState("Dane sa zapisywane lokalnie w przegladarce.");
+  const [message, setMessage] = useState("Ladowanie danych...");
   const [busy, setBusy] = useState(false);
   const [playerName, setPlayerName] = useState("");
   const [matchForm, setMatchForm] = useState({ home_team: "", away_team: "" });
 
-  useEffect(() => {
-    const next = loadState();
+  async function load() {
+    const next = await api<AppState>("state");
     setData(next);
-    if (next.players[0]) setActivePlayer(next.players[0].id);
-  }, []);
+    setActivePlayer((current) => current || next.players[0]?.id || "");
+    setMessage("");
+  }
 
   useEffect(() => {
-    saveState(data);
-  }, [data]);
-
-  const standings = useMemo(() => {
-    return data.players
-      .map((player) => {
-        const playerPredictions = data.predictions.filter((prediction) => prediction.player_id === player.id);
-        return {
-          player_id: player.id,
-          name: player.name,
-          points: playerPredictions.reduce((sum, prediction) => sum + prediction.points, 0),
-          exact_hits: playerPredictions.filter((prediction) => prediction.points === 3).length,
-          outcome_hits: playerPredictions.filter((prediction) => prediction.points > 0).length,
-          predictions: playerPredictions.length,
-        };
-      })
-      .sort((a, b) => b.points - a.points || b.exact_hits - a.exact_hits || b.outcome_hits - a.outcome_hits || a.name.localeCompare(b.name));
-  }, [data.players, data.predictions]);
+    load().catch((error) => setMessage(error.message));
+  }, []);
 
   const nextMatches = data.matches.filter((match) => match.status === "scheduled");
   const finishedMatches = data.matches.filter((match) => match.status === "finished");
@@ -104,16 +83,16 @@ function App() {
     const name = playerName.trim();
     if (!name) return;
     setBusy(true);
-    const player: Player = {
-      id: Date.now(),
-      name,
-      created_at: new Date().toISOString(),
-    };
-    setData((current) => ({ ...current, players: [...current.players, player] }));
-    setPlayerName("");
-    setActivePlayer(player.id);
-    setMessage(`Dodano zawodnika: ${name}`);
-    setBusy(false);
+    try {
+      await api("players", { method: "POST", body: JSON.stringify({ name }) });
+      setPlayerName("");
+      setMessage(`Dodano zawodnika: ${name}`);
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Blad zapisu");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function submitMatch(event: FormEvent) {
@@ -122,63 +101,58 @@ function App() {
     const away = matchForm.away_team.trim();
     if (!home || !away) return;
     setBusy(true);
-    const match: Match = {
-      id: Date.now(),
-      home_team: home,
-      away_team: away,
-      status: "scheduled",
-      home_score: null,
-      away_score: null,
-      created_at: new Date().toISOString(),
-    };
-    setData((current) => ({ ...current, matches: [...current.matches, match] }));
-    setMatchForm({ home_team: "", away_team: "" });
-    setMessage(`Dodano mecz: ${home} - ${away}`);
-    setBusy(false);
-  }
-
-  function savePrediction(matchId: number, home: string, away: string) {
-    if (!activePlayer || home === "" || away === "") return;
-    const pickHome = Number(home);
-    const pickAway = Number(away);
-    setData((current) => {
-      const match = current.matches.find((entry) => entry.id === matchId);
-      const points = pointsFor(pickHome, pickAway, match?.home_score ?? null, match?.away_score ?? null);
-      const filtered = current.predictions.filter((prediction) => !(prediction.match_id === matchId && prediction.player_id === activePlayer));
-      const nextPrediction: Prediction = {
-        id: Date.now(),
-        match_id: matchId,
-        player_id: activePlayer,
-        home_score: pickHome,
-        away_score: pickAway,
-        points,
-        created_at: new Date().toISOString(),
-      };
-      return { ...current, predictions: [...filtered, nextPrediction] };
-    });
-    setMessage("Zapisano typ.");
-  }
-
-  function saveResult(matchId: number, home: string, away: string) {
-    if (home === "" || away === "") return;
-    const homeScore = Number(home);
-    const awayScore = Number(away);
-    setData((current) => {
-      const nextMatches = current.matches.map((match) =>
-        match.id === matchId
-          ? { ...match, status: "finished" as const, home_score: homeScore, away_score: awayScore }
-          : match
-      );
-      const nextPredictions = current.predictions.map((prediction) => {
-        if (prediction.match_id !== matchId) return prediction;
-        return {
-          ...prediction,
-          points: pointsFor(prediction.home_score, prediction.away_score, homeScore, awayScore),
-        };
+    try {
+      await api("matches", {
+        method: "POST",
+        body: JSON.stringify({ home_team: home, away_team: away }),
       });
-      return { ...current, matches: nextMatches, predictions: nextPredictions };
-    });
-    setMessage(`Zapisano wynik ${homeScore}:${awayScore}.`);
+      setMatchForm({ home_team: "", away_team: "" });
+      setMessage(`Dodano mecz: ${home} - ${away}`);
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Blad zapisu");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function savePrediction(matchId: number, home: string, away: string) {
+    if (!activePlayer || home === "" || away === "") return;
+    setBusy(true);
+    try {
+      await api("predictions", {
+        method: "POST",
+        body: JSON.stringify({
+          match_id: matchId,
+          player_id: activePlayer,
+          home_score: Number(home),
+          away_score: Number(away),
+        }),
+      });
+      setMessage("Zapisano typ.");
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Blad zapisu");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveResult(matchId: number, home: string, away: string) {
+    if (home === "" || away === "") return;
+    setBusy(true);
+    try {
+      await api(`matches/${matchId}/result`, {
+        method: "POST",
+        body: JSON.stringify({ home_score: Number(home), away_score: Number(away) }),
+      });
+      setMessage(`Zapisano wynik ${home}:${away}.`);
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Blad zapisu");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -187,9 +161,7 @@ function App() {
         <div>
           <p className="eyebrow">Rodzinny typer</p>
           <h1>Mistrzostwa swiata 2026</h1>
-          <p className="lead">
-            Dodawaj zawodnikow, wpisuj mecze i sprawdzaj tabele wynikow. Wszystko zapisuje sie lokalnie w przegladarce.
-          </p>
+          <p className="lead">Dodawaj zawodnikow, wpisuj mecze, typuj wyniki i sprawdzaj tabele z jednej wspolnej bazy.</p>
         </div>
         <div className="rules" aria-label="Punktacja">
           <strong>Punktacja</strong>
@@ -222,12 +194,12 @@ function App() {
           <div className="match-inputs">
             <input
               value={matchForm.home_team}
-              onChange={(e) => setMatchForm({ ...matchForm, home_team: e.target.value })}
+              onChange={(event) => setMatchForm({ ...matchForm, home_team: event.target.value })}
               placeholder="Zespol A"
             />
             <input
               value={matchForm.away_team}
-              onChange={(e) => setMatchForm({ ...matchForm, away_team: e.target.value })}
+              onChange={(event) => setMatchForm({ ...matchForm, away_team: event.target.value })}
               placeholder="Zespol B"
             />
             <button disabled={busy}>Dodaj</button>
@@ -238,7 +210,7 @@ function App() {
       <section className="panel">
         <div className="section-head">
           <h2>Tabela wynikow</h2>
-          <span>{standings.length} graczy</span>
+          <span>{data.standings.length} graczy</span>
         </div>
         <div className="table-wrap">
           <table>
@@ -253,7 +225,7 @@ function App() {
               </tr>
             </thead>
             <tbody>
-              {standings.map((row, index) => (
+              {data.standings.map((row, index) => (
                 <tr key={row.player_id}>
                   <td>{index + 1}</td>
                   <td>{row.name}</td>
@@ -278,7 +250,11 @@ function App() {
             <PredictionCard
               key={match.id}
               match={match}
-              prediction={activePlayer ? data.predictions.find((prediction) => prediction.match_id === match.id && prediction.player_id === activePlayer) : undefined}
+              prediction={
+                activePlayer
+                  ? data.predictions.find((prediction) => prediction.match_id === match.id && prediction.player_id === activePlayer)
+                  : undefined
+              }
               disabled={!activePlayer || busy}
               onSave={savePrediction}
               onResult={saveResult}
