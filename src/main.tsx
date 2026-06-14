@@ -6,13 +6,12 @@ import "./style.css";
 type Player = { id: number; name: string; created_at: string };
 type Match = {
   id: number;
-  external_id: string | null;
   home_team: string;
   away_team: string;
-  starts_at: string;
   status: "scheduled" | "finished";
   home_score: number | null;
   away_score: number | null;
+  created_at: string;
 };
 type Prediction = {
   id: number;
@@ -21,6 +20,7 @@ type Prediction = {
   home_score: number;
   away_score: number;
   points: number;
+  created_at: string;
 };
 type Standing = {
   player_id: number;
@@ -34,141 +34,151 @@ type AppState = {
   players: Player[];
   matches: Match[];
   predictions: Prediction[];
-  standings: Standing[];
 };
 
-const emptyState: AppState = {
-  players: [],
-  matches: [],
-  predictions: [],
-  standings: [],
-};
+const storageKey = "family-bet-local-v1";
 
-async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`/api/${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ error: "Blad API" }));
-    throw new Error(error.error || "Nie udalo sie zapisac danych");
+function loadState(): AppState {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return { players: [], matches: [], predictions: [] };
+    return JSON.parse(raw) as AppState;
+  } catch {
+    return { players: [], matches: [], predictions: [] };
   }
-  return res.json();
 }
 
-function fmtDate(value: string) {
-  return new Intl.DateTimeFormat("pl-PL", {
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
+function saveState(state: AppState) {
+  localStorage.setItem(storageKey, JSON.stringify(state));
 }
 
-function scoreLabel(match: Match) {
-  if (match.home_score === null || match.away_score === null) return "brak wyniku";
-  return `${match.home_score}:${match.away_score}`;
+function scoreOutcome(home: number, away: number) {
+  return Math.sign(home - away);
+}
+
+function pointsFor(pickHome: number, pickAway: number, home: number | null, away: number | null) {
+  if (home === null || away === null) return 0;
+  if (pickHome === home && pickAway === away) return 3;
+  return scoreOutcome(pickHome, pickAway) === scoreOutcome(home, away) ? 1 : 0;
 }
 
 function App() {
-  const [data, setData] = useState<AppState>(emptyState);
+  const [data, setData] = useState<AppState>({ players: [], matches: [], predictions: [] });
   const [activePlayer, setActivePlayer] = useState<number | "">("");
-  const [message, setMessage] = useState("Ladowanie danych...");
+  const [message, setMessage] = useState("Dane sa zapisywane lokalnie w przegladarce.");
   const [busy, setBusy] = useState(false);
   const [playerName, setPlayerName] = useState("");
-  const [matchForm, setMatchForm] = useState({
-    home_team: "",
-    away_team: "",
-    starts_at: "",
-  });
-
-  async function load() {
-    const next = await api<AppState>("state");
-    setData(next);
-    if (!activePlayer && next.players[0]) setActivePlayer(next.players[0].id);
-    setMessage("");
-  }
+  const [matchForm, setMatchForm] = useState({ home_team: "", away_team: "" });
 
   useEffect(() => {
-    load().catch((error) => setMessage(error.message));
+    const next = loadState();
+    setData(next);
+    if (next.players[0]) setActivePlayer(next.players[0].id);
   }, []);
 
-  const predictionMap = useMemo(() => {
-    const map = new Map<string, Prediction>();
-    data.predictions.forEach((prediction) => {
-      map.set(`${prediction.match_id}:${prediction.player_id}`, prediction);
-    });
-    return map;
-  }, [data.predictions]);
+  useEffect(() => {
+    saveState(data);
+  }, [data]);
+
+  const standings = useMemo(() => {
+    return data.players
+      .map((player) => {
+        const playerPredictions = data.predictions.filter((prediction) => prediction.player_id === player.id);
+        return {
+          player_id: player.id,
+          name: player.name,
+          points: playerPredictions.reduce((sum, prediction) => sum + prediction.points, 0),
+          exact_hits: playerPredictions.filter((prediction) => prediction.points === 3).length,
+          outcome_hits: playerPredictions.filter((prediction) => prediction.points > 0).length,
+          predictions: playerPredictions.length,
+        };
+      })
+      .sort((a, b) => b.points - a.points || b.exact_hits - a.exact_hits || b.outcome_hits - a.outcome_hits || a.name.localeCompare(b.name));
+  }, [data.players, data.predictions]);
 
   const nextMatches = data.matches.filter((match) => match.status === "scheduled");
   const finishedMatches = data.matches.filter((match) => match.status === "finished");
 
   async function submitPlayer(event: FormEvent) {
     event.preventDefault();
-    if (!playerName.trim()) return;
+    const name = playerName.trim();
+    if (!name) return;
     setBusy(true);
-    try {
-      await api("players", { method: "POST", body: JSON.stringify({ name: playerName }) });
-      setPlayerName("");
-      await load();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Blad zapisu");
-    } finally {
-      setBusy(false);
-    }
+    const player: Player = {
+      id: Date.now(),
+      name,
+      created_at: new Date().toISOString(),
+    };
+    setData((current) => ({ ...current, players: [...current.players, player] }));
+    setPlayerName("");
+    setActivePlayer(player.id);
+    setMessage(`Dodano zawodnika: ${name}`);
+    setBusy(false);
   }
 
   async function submitMatch(event: FormEvent) {
     event.preventDefault();
-    if (!matchForm.home_team || !matchForm.away_team || !matchForm.starts_at) return;
+    const home = matchForm.home_team.trim();
+    const away = matchForm.away_team.trim();
+    if (!home || !away) return;
     setBusy(true);
-    try {
-      await api("matches", { method: "POST", body: JSON.stringify(matchForm) });
-      setMatchForm({ home_team: "", away_team: "", starts_at: "" });
-      await load();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Blad zapisu");
-    } finally {
-      setBusy(false);
-    }
+    const match: Match = {
+      id: Date.now(),
+      home_team: home,
+      away_team: away,
+      status: "scheduled",
+      home_score: null,
+      away_score: null,
+      created_at: new Date().toISOString(),
+    };
+    setData((current) => ({ ...current, matches: [...current.matches, match] }));
+    setMatchForm({ home_team: "", away_team: "" });
+    setMessage(`Dodano mecz: ${home} - ${away}`);
+    setBusy(false);
   }
 
-  async function savePrediction(matchId: number, home: string, away: string) {
+  function savePrediction(matchId: number, home: string, away: string) {
     if (!activePlayer || home === "" || away === "") return;
-    setBusy(true);
-    try {
-      await api("predictions", {
-        method: "POST",
-        body: JSON.stringify({
-          match_id: matchId,
-          player_id: activePlayer,
-          home_score: Number(home),
-          away_score: Number(away),
-        }),
-      });
-      await load();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Blad zapisu");
-    } finally {
-      setBusy(false);
-    }
+    const pickHome = Number(home);
+    const pickAway = Number(away);
+    setData((current) => {
+      const match = current.matches.find((entry) => entry.id === matchId);
+      const points = pointsFor(pickHome, pickAway, match?.home_score ?? null, match?.away_score ?? null);
+      const filtered = current.predictions.filter((prediction) => !(prediction.match_id === matchId && prediction.player_id === activePlayer));
+      const nextPrediction: Prediction = {
+        id: Date.now(),
+        match_id: matchId,
+        player_id: activePlayer,
+        home_score: pickHome,
+        away_score: pickAway,
+        points,
+        created_at: new Date().toISOString(),
+      };
+      return { ...current, predictions: [...filtered, nextPrediction] };
+    });
+    setMessage("Zapisano typ.");
   }
 
-  async function saveResult(matchId: number, home: string, away: string) {
+  function saveResult(matchId: number, home: string, away: string) {
     if (home === "" || away === "") return;
-    setBusy(true);
-    try {
-      await api(`matches/${matchId}/result`, {
-        method: "POST",
-        body: JSON.stringify({ home_score: Number(home), away_score: Number(away) }),
+    const homeScore = Number(home);
+    const awayScore = Number(away);
+    setData((current) => {
+      const nextMatches = current.matches.map((match) =>
+        match.id === matchId
+          ? { ...match, status: "finished" as const, home_score: homeScore, away_score: awayScore }
+          : match
+      );
+      const nextPredictions = current.predictions.map((prediction) => {
+        if (prediction.match_id !== matchId) return prediction;
+        return {
+          ...prediction,
+          points: pointsFor(prediction.home_score, prediction.away_score, homeScore, awayScore),
+        };
       });
-      await load();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Blad zapisu");
-    } finally {
-      setBusy(false);
-    }
+      return { ...current, matches: nextMatches, predictions: nextPredictions };
+    });
+    setMessage(`Zapisano wynik ${homeScore}:${awayScore}.`);
   }
 
   return (
@@ -178,7 +188,7 @@ function App() {
           <p className="eyebrow">Rodzinny typer</p>
           <h1>Mistrzostwa swiata 2026</h1>
           <p className="lead">
-            Dodawaj zawodnikow, typuj wyniki meczow, wpisuj finalne rezultaty i sprawdzaj tabele punktow.
+            Dodawaj zawodnikow, wpisuj mecze i sprawdzaj tabele wynikow. Wszystko zapisuje sie lokalnie w przegladarce.
           </p>
         </div>
         <div className="rules" aria-label="Punktacja">
@@ -220,11 +230,6 @@ function App() {
               onChange={(e) => setMatchForm({ ...matchForm, away_team: e.target.value })}
               placeholder="Zespol B"
             />
-            <input
-              type="datetime-local"
-              value={matchForm.starts_at}
-              onChange={(e) => setMatchForm({ ...matchForm, starts_at: e.target.value })}
-            />
             <button disabled={busy}>Dodaj</button>
           </div>
         </form>
@@ -233,7 +238,7 @@ function App() {
       <section className="panel">
         <div className="section-head">
           <h2>Tabela wynikow</h2>
-          <span>{data.standings.length} graczy</span>
+          <span>{standings.length} graczy</span>
         </div>
         <div className="table-wrap">
           <table>
@@ -248,7 +253,7 @@ function App() {
               </tr>
             </thead>
             <tbody>
-              {data.standings.map((row, index) => (
+              {standings.map((row, index) => (
                 <tr key={row.player_id}>
                   <td>{index + 1}</td>
                   <td>{row.name}</td>
@@ -273,7 +278,7 @@ function App() {
             <PredictionCard
               key={match.id}
               match={match}
-              prediction={activePlayer ? predictionMap.get(`${match.id}:${activePlayer}`) : undefined}
+              prediction={activePlayer ? data.predictions.find((prediction) => prediction.match_id === match.id && prediction.player_id === activePlayer) : undefined}
               disabled={!activePlayer || busy}
               onSave={savePrediction}
               onResult={saveResult}
@@ -295,9 +300,8 @@ function App() {
                 <strong>
                   {match.home_team} - {match.away_team}
                 </strong>
-                <span>{fmtDate(match.starts_at)}</span>
               </div>
-              <b>{scoreLabel(match)}</b>
+              <b>{match.home_score === null || match.away_score === null ? "brak wyniku" : `${match.home_score}:${match.away_score}`}</b>
             </article>
           ))}
           {!finishedMatches.length && <p className="empty">Tutaj pojawia sie zakonczone mecze.</p>}
@@ -322,18 +326,22 @@ function PredictionCard({
 }) {
   const [home, setHome] = useState(prediction?.home_score.toString() ?? "");
   const [away, setAway] = useState(prediction?.away_score.toString() ?? "");
-  const [resultHome, setResultHome] = useState("");
-  const [resultAway, setResultAway] = useState("");
+  const [resultHome, setResultHome] = useState(match.home_score?.toString() ?? "");
+  const [resultAway, setResultAway] = useState(match.away_score?.toString() ?? "");
 
   useEffect(() => {
     setHome(prediction?.home_score.toString() ?? "");
     setAway(prediction?.away_score.toString() ?? "");
   }, [prediction?.home_score, prediction?.away_score]);
 
+  useEffect(() => {
+    setResultHome(match.home_score?.toString() ?? "");
+    setResultAway(match.away_score?.toString() ?? "");
+  }, [match.home_score, match.away_score]);
+
   return (
     <article className="match-card">
       <div className="match-main">
-        <span>{fmtDate(match.starts_at)}</span>
         <strong>
           {match.home_team} - {match.away_team}
         </strong>
@@ -342,7 +350,7 @@ function PredictionCard({
         <input min="0" type="number" value={home} onChange={(e) => setHome(e.target.value)} />
         <span>:</span>
         <input min="0" type="number" value={away} onChange={(e) => setAway(e.target.value)} />
-        <button disabled={disabled} onClick={() => onSave(match.id, home, away)}>
+        <button type="button" disabled={disabled} onClick={() => onSave(match.id, home, away)}>
           Zapisz typ
         </button>
       </div>
@@ -351,7 +359,9 @@ function PredictionCard({
         <input min="0" type="number" value={resultHome} onChange={(e) => setResultHome(e.target.value)} />
         <span>:</span>
         <input min="0" type="number" value={resultAway} onChange={(e) => setResultAway(e.target.value)} />
-        <button onClick={() => onResult(match.id, resultHome, resultAway)}>Zakoncz</button>
+        <button type="button" onClick={() => onResult(match.id, resultHome, resultAway)}>
+          Zakoncz
+        </button>
       </div>
     </article>
   );
