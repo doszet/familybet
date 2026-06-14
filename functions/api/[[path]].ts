@@ -13,6 +13,11 @@ const json = (body: unknown, status = 200) =>
 
 const bad = (error: string, status = 400) => json({ error }, status);
 
+const requireDb = (db: D1Database | undefined) => {
+  if (!db) throw new Error("Brak bindingu DB w Cloudflare Pages Functions. Podlacz baze D1 pod nazwa DB.");
+  return db;
+};
+
 const outcome = (home: number, away: number) => Math.sign(home - away);
 
 const pointsFor = (pickHome: number, pickAway: number, home: number | null, away: number | null) => {
@@ -140,14 +145,15 @@ export async function onRequest(context: Ctx) {
   const method = request.method.toUpperCase();
 
   try {
-    if (method === "GET" && path === "state") return state(env.DB);
-    if (method === "POST" && path === "players") return addPlayer(request, env.DB);
-    if (method === "POST" && path === "matches") return addMatch(request, env.DB);
-    if (method === "POST" && path === "predictions") return savePrediction(request, env.DB);
+    const db = requireDb(env.DB);
+    if (method === "GET" && path === "state") return state(db);
+    if (method === "POST" && path === "players") return addPlayer(request, db);
+    if (method === "POST" && path === "matches") return addMatch(request, db);
+    if (method === "POST" && path === "predictions") return savePrediction(request, db);
     if (method === "POST" && path === "import-matches") return importMatches(request, env);
 
     const resultMatch = path.match(/^matches\/(\d+)\/result$/);
-    if (method === "POST" && resultMatch) return saveResult(request, env.DB, Number(resultMatch[1]));
+    if (method === "POST" && resultMatch) return saveResult(request, db, Number(resultMatch[1]));
 
     return bad("Nie znaleziono endpointu", 404);
   } catch (error) {

@@ -50,8 +50,13 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
     ...options,
   });
   if (!res.ok) {
-    const error = await res.json().catch(() => ({ error: "Blad API" }));
-    throw new Error(error.error || "Nie udalo sie zapisac danych");
+    const text = await res.text();
+    try {
+      const error = JSON.parse(text) as { error?: string };
+      throw new Error(error.error || `API zwrocilo blad ${res.status}`);
+    } catch {
+      throw new Error(text || `API zwrocilo blad ${res.status}`);
+    }
   }
   return res.json();
 }
@@ -65,10 +70,18 @@ function App() {
   const [matchForm, setMatchForm] = useState({ home_team: "", away_team: "" });
 
   async function load() {
-    const next = await api<AppState>("state");
-    setData(next);
-    setActivePlayer((current) => current || next.players[0]?.id || "");
-    setMessage("");
+    try {
+      const next = await api<AppState>("state");
+      setData(next);
+      setActivePlayer((current) => current || next.players[0]?.id || "");
+      setMessage("");
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Nie mozna polaczyc z baza. Sprawdz binding `DB` w Cloudflare Pages i deploy functions."
+      );
+    }
   }
 
   useEffect(() => {
