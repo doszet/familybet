@@ -67,7 +67,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [playerName, setPlayerName] = useState("");
   const [matchForm, setMatchForm] = useState({ home_team: "", away_team: "" });
-  const [collapseUpcoming, setCollapseUpcoming] = useState(false);
+  const [collapseUpcoming, setCollapseUpcoming] = useState(true);
 
   async function load() {
     try {
