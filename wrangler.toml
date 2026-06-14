@@ -1,0 +1,8 @@
+name = "family-bet"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-06-14"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "family-bet"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
