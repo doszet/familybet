@@ -557,4 +557,41 @@ function PlayerChip({
   );
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+function PasswordGate() {
+  const [value, setValue] = useState("");
+
+  const submit = () => {
+    if (value === import.meta.env.VITE_SITE_PASSWORD) {
+      localStorage.setItem("authorized", "true");
+      location.reload();
+    } else {
+      alert("Nieprawidłowe hasło");
+    }
+  };
+
+  return (
+    <div style={{ padding: 40, textAlign: "center" }}>
+      <h2>Podaj hasło</h2>
+
+      <input
+        type="password"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+        }}
+      />
+
+      <br />
+      <br />
+
+      <button onClick={submit}>Wejdź</button>
+    </div>
+  );
+}
+
+const authorized = localStorage.getItem("authorized") === "true";
+
+createRoot(document.getElementById("root")!).render(
+  authorized ? <App /> : <PasswordGate />
+);
