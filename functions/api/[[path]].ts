@@ -81,6 +81,15 @@ async function addPlayer(request: Request, db: D1Database) {
   return json({ ok: true }, 201);
 }
 
+async function updatePlayer(request: Request, db: D1Database, id: number) {
+  const body = await readBody<{ name?: string }>(request);
+  const name = body.name?.trim();
+  if (!name) return bad("Podaj imie zawodnika");
+  const result = await db.prepare("UPDATE players SET name = ? WHERE id = ?").bind(name, id).run();
+  if (!result.meta.changes) return bad("Nie znaleziono zawodnika", 404);
+  return json({ ok: true });
+}
+
 async function addMatch(request: Request, db: D1Database) {
   const body = await readBody<{ home_team?: string; away_team?: string }>(request);
   const home = body.home_team?.trim();
@@ -170,6 +179,9 @@ export async function onRequest(context: Ctx) {
 
     const resultMatch = path.match(/^matches\/(\d+)\/result$/);
     if (method === "POST" && resultMatch) return saveResult(request, db, Number(resultMatch[1]));
+
+    const playerMatch = path.match(/^players\/(\d+)$/);
+    if (method === "PUT" && playerMatch) return updatePlayer(request, db, Number(playerMatch[1]));
 
     return bad("Nie znaleziono endpointu", 404);
   } catch (error) {

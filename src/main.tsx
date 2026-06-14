@@ -179,13 +179,13 @@ function App() {
       <section className="hero">
         <div>
           <p className="eyebrow">Rodzinny typer</p>
-          <h1>Mistrzostwa swiata 2026</h1>
+          <h1 className="hero-title">Mistrzostwa swiata 2026</h1>
           <p className="lead">Dodawaj zawodnikow, wpisuj mecze, typuj wyniki i sprawdzaj tabele z jednej wspolnej bazy.</p>
         </div>
         <div className="rules" aria-label="Punktacja">
           <strong>Punktacja</strong>
           <span>3 pkt za dokladny wynik</span>
-          <span>1 pkt za dobry kierunek meczu</span>
+          <span>1 pkt za dobry wynik meczu</span>
         </div>
       </section>
 
@@ -297,9 +297,7 @@ function App() {
         </div>
         <div className="players-list">
           {data.players.map((player) => (
-            <span key={player.id} className="player-chip">
-              {player.name}
-            </span>
+            <PlayerChip key={player.id} player={player} onUpdated={load} onError={(text) => setMessage(text)} />
           ))}
           {!data.players.length && <p className="empty">Dodaj pierwszego zawodnika, zeby zaczac typowanie.</p>}
         </div>
@@ -351,7 +349,6 @@ function PredictionCard({
           <strong>
             {match.home_team} - {match.away_team}
           </strong>
-          <span>{match.starts_at}</span>
         </div>
         <div className="result-form">
           <span>Wynik meczu</span>
@@ -421,7 +418,6 @@ function HistoryMatch({ match, predictions, players }: { match: Match; predictio
           <strong>
             {match.home_team} - {match.away_team}
           </strong>
-          <span>{match.starts_at}</span>
         </div>
         <b>{result ? `${result.home}:${result.away}` : "brak wyniku"}</b>
       </summary>
@@ -455,6 +451,68 @@ function getPredictionState(prediction: Prediction, result: { home: number; away
     return "outcome";
   }
   return "wrong";
+}
+
+function PlayerChip({
+  player,
+  onUpdated,
+  onError,
+}: {
+  player: Player;
+  onUpdated: () => Promise<void>;
+  onError: (message: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(player.name);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setName(player.name);
+  }, [player.name]);
+
+  async function save() {
+    const next = name.trim();
+    if (!next || next === player.name) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    try {
+      await api(`players/${player.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name: next }),
+      });
+      setEditing(false);
+      await onUpdated();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Blad zapisu");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="player-chip">
+      {editing ? (
+        <>
+          <input value={name} onChange={(event) => setName(event.target.value)} />
+          <button type="button" disabled={busy} onClick={save}>
+            Zapisz
+          </button>
+          <button type="button" className="secondary-button" disabled={busy} onClick={() => setEditing(false)}>
+            Anuluj
+          </button>
+        </>
+      ) : (
+        <>
+          <span>{player.name}</span>
+          <button type="button" className="secondary-button" onClick={() => setEditing(true)}>
+            Edytuj
+          </button>
+        </>
+      )}
+    </div>
+  );
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
