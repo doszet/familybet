@@ -63,7 +63,6 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 
 function App() {
   const [data, setData] = useState<AppState>(emptyState);
-  const [activePlayer, setActivePlayer] = useState<number | "">("");
   const [message, setMessage] = useState("Ladowanie danych...");
   const [busy, setBusy] = useState(false);
   const [playerName, setPlayerName] = useState("");
@@ -73,7 +72,6 @@ function App() {
     try {
       const next = await api<AppState>("state");
       setData(next);
-      setActivePlayer((current) => current || next.players[0]?.id || "");
       setMessage("");
     } catch (error) {
       setMessage(
@@ -129,20 +127,28 @@ function App() {
     }
   }
 
-  async function savePrediction(matchId: number, home: string, away: string) {
-    if (!activePlayer || home === "" || away === "") return;
+  async function saveMatchPredictions(
+    matchId: number,
+    predictions: Array<{ player_id: number; home_score: string; away_score: string }>
+  ) {
+    const payload = predictions.filter((prediction) => prediction.home_score !== "" && prediction.away_score !== "");
+    if (!payload.length) return;
     setBusy(true);
     try {
-      await api("predictions", {
-        method: "POST",
-        body: JSON.stringify({
-          match_id: matchId,
-          player_id: activePlayer,
-          home_score: Number(home),
-          away_score: Number(away),
-        }),
-      });
-      setMessage("Zapisano typ.");
+      await Promise.all(
+        payload.map((prediction) =>
+          api("predictions", {
+            method: "POST",
+            body: JSON.stringify({
+              match_id: matchId,
+              player_id: prediction.player_id,
+              home_score: Number(prediction.home_score),
+              away_score: Number(prediction.away_score),
+            }),
+          })
+        )
+      );
+      setMessage("Zapisano typy dla meczu.");
       await load();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Blad zapisu");
@@ -187,19 +193,11 @@ function App() {
 
       <section className="grid top-grid">
         <form className="panel" onSubmit={submitPlayer}>
-          <h2>Zawodnicy</h2>
+          <h2>Dodaj zawodnika</h2>
           <div className="inline-form">
             <input value={playerName} onChange={(e) => setPlayerName(e.target.value)} placeholder="Imie" />
             <button disabled={busy}>Dodaj</button>
           </div>
-          <select value={activePlayer} onChange={(e) => setActivePlayer(Number(e.target.value))}>
-            <option value="">Wybierz typujacego</option>
-            {data.players.map((player) => (
-              <option key={player.id} value={player.id}>
-                {player.name}
-              </option>
-            ))}
-          </select>
         </form>
 
         <form className="panel" onSubmit={submitMatch}>
@@ -263,13 +261,10 @@ function App() {
             <PredictionCard
               key={match.id}
               match={match}
-              prediction={
-                activePlayer
-                  ? data.predictions.find((prediction) => prediction.match_id === match.id && prediction.player_id === activePlayer)
-                  : undefined
-              }
-              disabled={!activePlayer || busy}
-              onSave={savePrediction}
+              players={data.players}
+              predictions={data.predictions.filter((prediction) => prediction.match_id === match.id)}
+              disabled={busy}
+              onSave={saveMatchPredictions}
               onResult={saveResult}
             />
           ))}
@@ -284,16 +279,29 @@ function App() {
         </div>
         <div className="history">
           {finishedMatches.map((match) => (
-            <article key={match.id} className="history-row">
-              <div>
-                <strong>
-                  {match.home_team} - {match.away_team}
-                </strong>
-              </div>
-              <b>{match.home_score === null || match.away_score === null ? "brak wyniku" : `${match.home_score}:${match.away_score}`}</b>
-            </article>
+            <HistoryMatch
+              key={match.id}
+              match={match}
+              predictions={data.predictions.filter((prediction) => prediction.match_id === match.id)}
+              players={data.players}
+            />
           ))}
           {!finishedMatches.length && <p className="empty">Tutaj pojawia sie zakonczone mecze.</p>}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="section-head">
+          <h2>Lista zawodnikow</h2>
+          <span>{data.players.length} osob</span>
+        </div>
+        <div className="players-list">
+          {data.players.map((player) => (
+            <span key={player.id} className="player-chip">
+              {player.name}
+            </span>
+          ))}
+          {!data.players.length && <p className="empty">Dodaj pierwszego zawodnika, zeby zaczac typowanie.</p>}
         </div>
       </section>
     </main>
@@ -302,26 +310,34 @@ function App() {
 
 function PredictionCard({
   match,
-  prediction,
+  players,
+  predictions,
   disabled,
   onSave,
   onResult,
 }: {
   match: Match;
-  prediction?: Prediction;
+  players: Player[];
+  predictions: Prediction[];
   disabled: boolean;
-  onSave: (matchId: number, home: string, away: string) => void;
+  onSave: (matchId: number, predictions: Array<{ player_id: number; home_score: string; away_score: string }>) => void;
   onResult: (matchId: number, home: string, away: string) => void;
 }) {
-  const [home, setHome] = useState(prediction?.home_score.toString() ?? "");
-  const [away, setAway] = useState(prediction?.away_score.toString() ?? "");
+  const [drafts, setDrafts] = useState<Record<number, { home: string; away: string }>>({});
   const [resultHome, setResultHome] = useState(match.home_score?.toString() ?? "");
   const [resultAway, setResultAway] = useState(match.away_score?.toString() ?? "");
 
   useEffect(() => {
-    setHome(prediction?.home_score.toString() ?? "");
-    setAway(prediction?.away_score.toString() ?? "");
-  }, [prediction?.home_score, prediction?.away_score]);
+    const nextDrafts: Record<number, { home: string; away: string }> = {};
+    for (const player of players) {
+      const prediction = predictions.find((item) => item.player_id === player.id);
+      nextDrafts[player.id] = {
+        home: prediction?.home_score.toString() ?? "",
+        away: prediction?.away_score.toString() ?? "",
+      };
+    }
+    setDrafts(nextDrafts);
+  }, [players, predictions, match.id]);
 
   useEffect(() => {
     setResultHome(match.home_score?.toString() ?? "");
@@ -330,30 +346,115 @@ function PredictionCard({
 
   return (
     <article className="match-card">
-      <div className="match-main">
-        <strong>
-          {match.home_team} - {match.away_team}
-        </strong>
+      <div className="match-header">
+        <div className="match-main">
+          <strong>
+            {match.home_team} - {match.away_team}
+          </strong>
+          <span>{match.starts_at}</span>
+        </div>
+        <div className="result-form">
+          <span>Wynik meczu</span>
+          <input min="0" type="number" value={resultHome} onChange={(e) => setResultHome(e.target.value)} />
+          <span>:</span>
+          <input min="0" type="number" value={resultAway} onChange={(e) => setResultAway(e.target.value)} />
+          <button type="button" onClick={() => onResult(match.id, resultHome, resultAway)}>
+            Zakoncz
+          </button>
+        </div>
       </div>
-      <div className="score-form">
-        <input min="0" type="number" value={home} onChange={(e) => setHome(e.target.value)} />
-        <span>:</span>
-        <input min="0" type="number" value={away} onChange={(e) => setAway(e.target.value)} />
-        <button type="button" disabled={disabled} onClick={() => onSave(match.id, home, away)}>
-          Zapisz typ
-        </button>
+      <div className="prediction-list">
+        {players.map((player) => {
+          const draft = drafts[player.id] ?? { home: "", away: "" };
+          return (
+            <div key={player.id} className="prediction-row">
+              <strong>{player.name}</strong>
+              <div className="score-form">
+                <input
+                  min="0"
+                  type="number"
+                  value={draft.home}
+                  onChange={(e) =>
+                    setDrafts((current) => ({
+                      ...current,
+                      [player.id]: { ...(current[player.id] ?? { home: "", away: "" }), home: e.target.value },
+                    }))
+                  }
+                />
+                <span>:</span>
+                <input
+                  min="0"
+                  type="number"
+                  value={draft.away}
+                  onChange={(e) =>
+                    setDrafts((current) => ({
+                      ...current,
+                      [player.id]: { ...(current[player.id] ?? { home: "", away: "" }), away: e.target.value },
+                    }))
+                  }
+                />
+              </div>
+            </div>
+          );
+        })}
       </div>
-      <div className="result-form">
-        <span>Wynik meczu</span>
-        <input min="0" type="number" value={resultHome} onChange={(e) => setResultHome(e.target.value)} />
-        <span>:</span>
-        <input min="0" type="number" value={resultAway} onChange={(e) => setResultAway(e.target.value)} />
-        <button type="button" onClick={() => onResult(match.id, resultHome, resultAway)}>
-          Zakoncz
-        </button>
-      </div>
+      <button
+        type="button"
+        className="save-match"
+        disabled={disabled}
+        onClick={() => onSave(match.id, Object.entries(drafts).map(([player_id, score]) => ({ player_id: Number(player_id), home_score: score.home, away_score: score.away })))}
+      >
+        Zapisz typy dla meczu
+      </button>
     </article>
   );
+}
+
+function HistoryMatch({ match, predictions, players }: { match: Match; predictions: Prediction[]; players: Player[] }) {
+  const [open, setOpen] = useState(false);
+  const result = match.home_score !== null && match.away_score !== null ? { home: match.home_score, away: match.away_score } : null;
+
+  return (
+    <details className="history-row" open={open} onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}>
+      <summary className="history-summary">
+        <div>
+          <strong>
+            {match.home_team} - {match.away_team}
+          </strong>
+          <span>{match.starts_at}</span>
+        </div>
+        <b>{result ? `${result.home}:${result.away}` : "brak wyniku"}</b>
+      </summary>
+      <div className="history-predictions">
+        {players.map((player) => {
+          const prediction = predictions.find((item) => item.player_id === player.id);
+          const state = prediction && result ? getPredictionState(prediction, result) : "neutral";
+          return (
+            <div key={player.id} className={`history-prediction ${state}`}>
+              <strong>{player.name}</strong>
+              <span>{prediction ? `${prediction.home_score}:${prediction.away_score}` : "brak typu"}</span>
+            </div>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
+function getPredictionState(prediction: Prediction, result: { home: number; away: number }) {
+  if (prediction.home_score === result.home && prediction.away_score === result.away) return "exact";
+  const predictionHomeWin = prediction.home_score > prediction.away_score;
+  const predictionAwayWin = prediction.home_score < prediction.away_score;
+  const resultHomeWin = result.home > result.away;
+  const resultAwayWin = result.home < result.away;
+  if (
+    (predictionHomeWin && resultHomeWin) ||
+    (predictionAwayWin && resultAwayWin) ||
+    (!predictionHomeWin && !predictionAwayWin && result.home === result.away)
+  ) {
+    return "outcome";
+  }
+  return "wrong";
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
