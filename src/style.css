@@ -542,39 +542,6 @@ th {
   margin-left: 10px;
 }
 
-.deadline-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  font-size: 0.85rem;
-  color: #697679;
-}
-
-.closed-badge {
-  background: #ff4444;
-  color: white;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 0.75rem;
-  font-weight: bold;
-}
-
-.warning-box {
-  background: #fff3cd;
-  border: 1px solid #ffc107;
-  border-radius: 8px;
-  padding: 10px;
-  color: #856404;
-  font-size: 0.9rem;
-  text-align: center;
-}
-
-.locked-icon {
-  font-size: 1.1rem;
-  margin-left: 5px;
-}
-
 .prediction-row .score-form {
   position: relative;
   display: flex;
@@ -594,23 +561,34 @@ th {
   gap: 12px;
 }
 
-.history-tools {
+.history-actions {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
   align-items: center;
-  border-top: 1px solid #edf1ee;
-  padding: 14px 16px;
-  background: #fff;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
-.compact-result {
-  grid-template-columns: auto 58px 10px 58px auto;
+.wide-modal {
+  max-width: 680px;
+}
+
+.modal-result-form {
   min-width: 0;
 }
 
-.danger-button {
-  color: #9b1c1c;
+.modal-predictions {
+  display: grid;
+  gap: 8px;
+}
+
+.modal-prediction-row {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 12px;
+  align-items: center;
+  border-radius: 10px;
+  background: #f8fbf9;
+  padding: 10px 12px;
 }
 
 .history-edit-form {
@@ -631,40 +609,19 @@ th {
     justify-content: space-between;
   }
   
-  .deadline-info {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-  
   .modal {
     width: 95%;
     padding: 16px;
   }
 
-  .history-tools {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .compact-result {
-    grid-template-columns: 1fr 10px 1fr;
-  }
-
-  .compact-result span:first-child,
-  .compact-result button {
-    grid-column: 1 / -1;
-  }
-
-  .history-prediction {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
+  .modal-prediction-row,
   .history-edit-form {
     grid-template-columns: 1fr 10px 1fr;
     min-width: 0;
   }
 
+  .modal-prediction-row strong,
+  .modal-prediction-row > span,
   .history-edit-form button {
     grid-column: 1 / -1;
   }

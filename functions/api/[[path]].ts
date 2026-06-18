@@ -39,11 +39,6 @@ async function ensureSchema(db: D1Database) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_predictions_match ON predictions(match_id)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_predictions_player ON predictions(player_id)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_matches_starts_at ON matches(starts_at)").run();
-
-  const matchColumns = await db.prepare("PRAGMA table_info(matches)").all<{ name: string }>();
-  if (!matchColumns.results.some((column) => column.name === "betting_deadline")) {
-    await db.prepare("ALTER TABLE matches ADD COLUMN betting_deadline TEXT").run();
-  }
 }
 
 async function readBody<T>(request: Request): Promise<T> {
@@ -100,14 +95,13 @@ async function addMatch(request: Request, db: D1Database) {
     home_team?: string;
     away_team?: string;
     starts_at?: string | null;
-    betting_deadline?: string | null;
   }>(request);
   const home = body.home_team?.trim();
   const away = body.away_team?.trim();
   if (!home || !away) return bad("Uzupelnij obie druzyny");
   await db
-    .prepare("INSERT INTO matches (home_team, away_team, starts_at, betting_deadline) VALUES (?, ?, ?, ?)")
-    .bind(home, away, body.starts_at || new Date().toISOString(), body.betting_deadline || null)
+    .prepare("INSERT INTO matches (home_team, away_team, starts_at) VALUES (?, ?, ?)")
+    .bind(home, away, body.starts_at || new Date().toISOString())
     .run();
   return json({ ok: true }, 201);
 }
@@ -139,15 +133,14 @@ async function updateMatch(request: Request, db: D1Database, id: number) {
     home_team?: string;
     away_team?: string;
     starts_at?: string | null;
-    betting_deadline?: string | null;
   }>(request);
   const home = body.home_team?.trim();
   const away = body.away_team?.trim();
   if (!home || !away) return bad("Uzupelnij obie druzyny");
 
   const result = await db
-    .prepare("UPDATE matches SET home_team = ?, away_team = ?, starts_at = ?, betting_deadline = ? WHERE id = ?")
-    .bind(home, away, body.starts_at || new Date().toISOString(), body.betting_deadline || null, id)
+    .prepare("UPDATE matches SET home_team = ?, away_team = ?, starts_at = ? WHERE id = ?")
+    .bind(home, away, body.starts_at || new Date().toISOString(), id)
     .run();
   if (!result.meta.changes) return bad("Nie znaleziono meczu", 404);
   return json({ ok: true });
