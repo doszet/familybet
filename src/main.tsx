@@ -13,6 +13,7 @@ type Match = {
   status: "scheduled" | "finished";
   home_score: number | null;
   away_score: number | null;
+  betting_deadline: string | null;
 };
 type Prediction = {
   id: number;
@@ -66,8 +67,14 @@ function App() {
   const [message, setMessage] = useState("Ladowanie danych...");
   const [busy, setBusy] = useState(false);
   const [playerName, setPlayerName] = useState("");
-  const [matchForm, setMatchForm] = useState({ home_team: "", away_team: "" });
+  const [matchForm, setMatchForm] = useState({ 
+    home_team: "", 
+    away_team: "", 
+    starts_at: "", 
+    betting_deadline: "" 
+  });
   const [collapseUpcoming, setCollapseUpcoming] = useState(true);
+  const [editingMatch, setEditingMatch] = useState<Match | null>(null);
 
   async function load() {
     try {
@@ -78,13 +85,13 @@ function App() {
       setMessage(
         error instanceof Error
           ? error.message
-          : "Nie mozna polaczyc z baza. Sprawdz binding `DB` w Cloudflare Pages i deploy functions."
+          : "Nie mozna polaczyc z baza."
       );
     }
   }
 
   useEffect(() => {
-    load().catch((error) => setMessage(error.message));
+    load();
   }, []);
 
   const nextMatches = data.matches.filter((match) => match.status === "scheduled");
@@ -116,9 +123,14 @@ function App() {
     try {
       await api("matches", {
         method: "POST",
-        body: JSON.stringify({ home_team: home, away_team: away }),
+        body: JSON.stringify({ 
+          home_team: home, 
+          away_team: away,
+          starts_at: matchForm.starts_at || null,
+          betting_deadline: matchForm.betting_deadline || null
+        }),
       });
-      setMatchForm({ home_team: "", away_team: "" });
+      setMatchForm({ home_team: "", away_team: "", starts_at: "", betting_deadline: "" });
       setMessage(`Dodano mecz: ${home} - ${away}`);
       await load();
     } catch (error) {
@@ -128,10 +140,56 @@ function App() {
     }
   }
 
+  async function updateMatch(match: Match) {
+    setBusy(true);
+    try {
+      await api(`matches/${match.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          home_team: match.home_team,
+          away_team: match.away_team,
+          starts_at: match.starts_at,
+          betting_deadline: match.betting_deadline,
+        }),
+      });
+      setMessage(`Zaktualizowano mecz: ${match.home_team} - ${match.away_team}`);
+      setEditingMatch(null);
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Blad zapisu");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteMatch(matchId: number) {
+    if (!confirm("Czy na pewno chcesz usunąć ten mecz?")) return;
+    setBusy(true);
+    try {
+      await api(`matches/${matchId}`, { method: "DELETE" });
+      setMessage("Usunięto mecz");
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Blad usuwania");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveMatchPredictions(
     matchId: number,
     predictions: Array<{ player_id: number; home_score: string; away_score: string }>
   ) {
+    const match = data.matches.find(m => m.id === matchId);
+    if (!match) return;
+    
+    if (isBettingClosed(match)) {
+      setMessage("⚠️ Nie mozna juz typowac - minął deadline typowania!");
+      setTimeout(() => setMessage(""), 3000);
+      await load();
+      return;
+    }
+    
     const payload = predictions.filter((prediction) => prediction.home_score !== "" && prediction.away_score !== "");
     if (!payload.length) return;
     setBusy(true);
@@ -175,6 +233,60 @@ function App() {
     }
   }
 
+  async function cancelResult(matchId: number) {
+    if (!confirm("Anulować zakończenie meczu i zabrać naliczone punkty?")) return;
+    setBusy(true);
+    try {
+      await api(`matches/${matchId}/cancel-result`, { method: "POST" });
+      setMessage("Anulowano zakończenie meczu i przeliczono tabelę.");
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Blad zapisu");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateFinishedPrediction(predictionId: number, home: string, away: string) {
+    if (home === "" || away === "") return;
+    setBusy(true);
+    try {
+      await api(`predictions/${predictionId}`, {
+        method: "PUT",
+        body: JSON.stringify({ home_score: Number(home), away_score: Number(away) }),
+      });
+      setMessage("Zaktualizowano typ i przeliczono tabelę.");
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Blad zapisu");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function isBettingClosed(match: Match): boolean {
+    if (!match.betting_deadline) return false;
+    const deadline = new Date(match.betting_deadline);
+    const now = new Date();
+    return now > deadline;
+  }
+
+  function formatDateTime(dateStr: string | null): string {
+    if (!dateStr) return "brak";
+    try {
+      const date = new Date(dateStr);
+      return date.toLocaleString("pl-PL", {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return dateStr;
+    }
+  }
+
   return (
     <main className="shell">
       <section className="hero">
@@ -199,14 +311,26 @@ function App() {
             <input
               value={matchForm.home_team}
               onChange={(event) => setMatchForm({ ...matchForm, home_team: event.target.value })}
-              placeholder="Zespol A"
+              placeholder="Gospodarze"
             />
             <input
               value={matchForm.away_team}
               onChange={(event) => setMatchForm({ ...matchForm, away_team: event.target.value })}
-              placeholder="Zespol B"
+              placeholder="Goście"
             />
-            <button disabled={busy}>Dodaj</button>
+            <input
+              type="datetime-local"
+              value={matchForm.starts_at}
+              onChange={(event) => setMatchForm({ ...matchForm, starts_at: event.target.value })}
+              placeholder="Data meczu"
+            />
+            <input
+              type="datetime-local"
+              value={matchForm.betting_deadline}
+              onChange={(event) => setMatchForm({ ...matchForm, betting_deadline: event.target.value })}
+              placeholder="Deadline typowania"
+            />
+            <button disabled={busy}>Dodaj mecz</button>
           </div>
         </form>
       </section>
@@ -269,6 +393,10 @@ function App() {
               collapsed={collapseUpcoming}
               onSave={saveMatchPredictions}
               onResult={saveResult}
+              onEdit={() => setEditingMatch(match)}
+              onDelete={() => deleteMatch(match.id)}
+              bettingClosed={isBettingClosed(match)}
+              formatDateTime={formatDateTime}
             />
           ))}
           {!nextMatches.length && <p className="empty">Brak zaplanowanych meczow.</p>}
@@ -289,6 +417,10 @@ function App() {
               match={match}
               predictions={data.predictions.filter((prediction) => prediction.match_id === match.id)}
               players={data.players}
+              disabled={busy}
+              onResult={saveResult}
+              onCancelResult={cancelResult}
+              onPredictionUpdate={updateFinishedPrediction}
             />
           ))}
           {!finishedMatches.length && <p className="empty">Tutaj pojawia sie zakonczone mecze.</p>}
@@ -302,8 +434,8 @@ function App() {
             <span>{data.players.length} osob</span>
           </div>
           <form className="inline-form compact" onSubmit={submitPlayer}>
-            <input value={playerName} onChange={(e) => setPlayerName(e.target.value)} placeholder="Imie" />
-            <button disabled={busy}>+</button>
+            <input value={playerName} onChange={(e) => setPlayerName(e.target.value)} placeholder="Imię" />
+            <button disabled={busy}>Dodaj</button>
           </form>
         </div>
         <div className="players-list">
@@ -313,7 +445,86 @@ function App() {
           {!data.players.length && <p className="empty">Dodaj pierwszego zawodnika, zeby zaczac typowanie.</p>}
         </div>
       </section>
+
+      {editingMatch && (
+        <EditMatchModal
+          match={editingMatch}
+          onSave={updateMatch}
+          onClose={() => setEditingMatch(null)}
+          disabled={busy}
+          formatDateTime={formatDateTime}
+        />
+      )}
     </main>
+  );
+}
+
+function EditMatchModal({ 
+  match, 
+  onSave, 
+  onClose, 
+  disabled,
+  formatDateTime 
+}: { 
+  match: Match; 
+  onSave: (match: Match) => void; 
+  onClose: () => void; 
+  disabled: boolean;
+  formatDateTime: (date: string | null) => string;
+}) {
+  const [editedMatch, setEditedMatch] = useState({ ...match });
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Edytuj mecz</h2>
+        <div className="modal-form">
+          <div className="form-field">
+            <label>Gospodarze</label>
+            <input
+              type="text"
+              value={editedMatch.home_team}
+              onChange={(e) => setEditedMatch({ ...editedMatch, home_team: e.target.value })}
+            />
+          </div>
+          <div className="form-field">
+            <label>Goście</label>
+            <input
+              type="text"
+              value={editedMatch.away_team}
+              onChange={(e) => setEditedMatch({ ...editedMatch, away_team: e.target.value })}
+            />
+          </div>
+          <div className="form-field">
+            <label>Data meczu</label>
+            <input
+              type="datetime-local"
+              value={editedMatch.starts_at?.slice(0, 16) || ""}
+              onChange={(e) => setEditedMatch({ ...editedMatch, starts_at: e.target.value })}
+            />
+            {editedMatch.starts_at && <small>Aktualnie: {formatDateTime(editedMatch.starts_at)}</small>}
+          </div>
+          <div className="form-field">
+            <label>Deadline typowania</label>
+            <input
+              type="datetime-local"
+              value={editedMatch.betting_deadline?.slice(0, 16) || ""}
+              onChange={(e) => setEditedMatch({ ...editedMatch, betting_deadline: e.target.value })}
+            />
+            {editedMatch.betting_deadline && <small>Aktualnie: {formatDateTime(editedMatch.betting_deadline)}</small>}
+            <small className="info-text">⏰ Po tym czasie nie będzie można już typować</small>
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button onClick={onClose} className="secondary-button" disabled={disabled}>
+            Anuluj
+          </button>
+          <button onClick={() => onSave(editedMatch)} disabled={disabled}>
+            Zapisz zmiany
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -325,6 +536,10 @@ function PredictionCard({
   collapsed,
   onSave,
   onResult,
+  onEdit,
+  onDelete,
+  bettingClosed,
+  formatDateTime,
 }: {
   match: Match;
   players: Player[];
@@ -333,6 +548,10 @@ function PredictionCard({
   collapsed: boolean;
   onSave: (matchId: number, predictions: Array<{ player_id: number; home_score: string; away_score: string }>) => void;
   onResult: (matchId: number, home: string, away: string) => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  bettingClosed: boolean;
+  formatDateTime: (date: string | null) => string;
 }) {
   const [drafts, setDrafts] = useState<Record<number, { home: string; away: string }>>({});
   const [resultHome, setResultHome] = useState(match.home_score?.toString() ?? "");
@@ -373,33 +592,80 @@ function PredictionCard({
             {match.home_team} - {match.away_team}
           </strong>
           <span>
-            {betCount}/{players.length} osob zrobilo beta
+            📊 {betCount}/{players.length} typów
           </span>
+          {match.betting_deadline && (
+            <span className="deadline-info">
+              ⏰ Deadline: {formatDateTime(match.betting_deadline)}
+              {bettingClosed && <span className="closed-badge">🔒 TYPOWANIE ZAMKNIĘTE</span>}
+            </span>
+          )}
+          {match.starts_at && <span>📅 Mecz: {formatDateTime(match.starts_at)}</span>}
         </div>
         <div className="match-summary-right">
-          <b>{match.home_score !== null && match.away_score !== null ? `${match.home_score}:${match.away_score}` : "w trakcie"}</b>
+          <b>{match.home_score !== null && match.away_score !== null ? `${match.home_score}:${match.away_score}` : "?"}</b>
+          <div className="action-buttons">
+            <button 
+              type="button" 
+              className="edit-button secondary-button" 
+              onClick={(e) => { e.preventDefault(); onEdit(); }}
+              title="Edytuj mecz"
+            >
+              ✏️
+            </button>
+            <button 
+              type="button" 
+              className="delete-button secondary-button" 
+              onClick={(e) => { e.preventDefault(); onDelete(); }}
+              title="Usuń mecz"
+            >
+              🗑️
+            </button>
+          </div>
         </div>
       </summary>
       <div className="match-body">
         <div className="match-header">
           <div className="match-main">
-            <strong>
-              {match.home_team} - {match.away_team}
-            </strong>
+            <strong>{match.home_team} - {match.away_team}</strong>
           </div>
           <div className="result-form">
-            <span>Wynik meczu</span>
-            <input min="0" type="number" value={resultHome} onChange={(e) => setResultHome(e.target.value)} />
+            <span>🏆 Wynik meczu</span>
+            <input 
+              min="0" 
+              type="number" 
+              value={resultHome} 
+              onChange={(e) => setResultHome(e.target.value)} 
+              placeholder="0"
+            />
             <span>:</span>
-            <input min="0" type="number" value={resultAway} onChange={(e) => setResultAway(e.target.value)} />
+            <input 
+              min="0" 
+              type="number" 
+              value={resultAway} 
+              onChange={(e) => setResultAway(e.target.value)} 
+              placeholder="0"
+            />
             <button type="button" onClick={() => onResult(match.id, resultHome, resultAway)}>
-              Zakoncz
+              Zakończ mecz
             </button>
           </div>
         </div>
+        
+        {bettingClosed && (
+          <div className="warning-box">
+            ⚠️ Deadline typowania minął! Nie można już zmieniać typów dla tego meczu.
+          </div>
+        )}
+        
         <div className="prediction-list">
+          <div className="prediction-header">
+            <span>Zawodnik</span>
+            <span>Typ</span>
+          </div>
           {players.map((player) => {
             const draft = drafts[player.id] ?? { home: "", away: "" };
+            const existingPrediction = predictions.find(p => p.player_id === player.id);
             return (
               <div key={player.id} className="prediction-row">
                 <strong>{player.name}</strong>
@@ -408,6 +674,8 @@ function PredictionCard({
                     min="0"
                     type="number"
                     value={draft.home}
+                    disabled={bettingClosed}
+                    placeholder="?"
                     onChange={(e) =>
                       setDrafts((current) => ({
                         ...current,
@@ -420,6 +688,8 @@ function PredictionCard({
                     min="0"
                     type="number"
                     value={draft.away}
+                    disabled={bettingClosed}
+                    placeholder="?"
                     onChange={(e) =>
                       setDrafts((current) => ({
                         ...current,
@@ -427,6 +697,7 @@ function PredictionCard({
                       }))
                     }
                   />
+                  {existingPrediction && bettingClosed && <span className="locked-icon" title="Typ zablokowany">🔒</span>}
                 </div>
               </div>
             );
@@ -435,20 +706,55 @@ function PredictionCard({
         <button
           type="button"
           className="save-match"
-          disabled={disabled}
+          disabled={disabled || bettingClosed}
           onClick={() => onSave(match.id, Object.entries(drafts).map(([player_id, score]) => ({ player_id: Number(player_id), home_score: score.home, away_score: score.away })))}
         >
-          Zapisz typy dla meczu
+          {bettingClosed ? "🔒 Typowanie zamknięte" : "💾 Zapisz typy"}
         </button>
       </div>
     </details>
   );
 }
 
-function HistoryMatch({ match, predictions, players }: { match: Match; predictions: Prediction[]; players: Player[] }) {
+function HistoryMatch({
+  match,
+  predictions,
+  players,
+  disabled,
+  onResult,
+  onCancelResult,
+  onPredictionUpdate,
+}: {
+  match: Match;
+  predictions: Prediction[];
+  players: Player[];
+  disabled: boolean;
+  onResult: (matchId: number, home: string, away: string) => void;
+  onCancelResult: (matchId: number) => void;
+  onPredictionUpdate: (predictionId: number, home: string, away: string) => void;
+}) {
   const [open, setOpen] = useState(false);
+  const [resultHome, setResultHome] = useState(match.home_score?.toString() ?? "");
+  const [resultAway, setResultAway] = useState(match.away_score?.toString() ?? "");
+  const [drafts, setDrafts] = useState<Record<number, { home: string; away: string }>>({});
   const result = match.home_score !== null && match.away_score !== null ? { home: match.home_score, away: match.away_score } : null;
   const betCount = players.filter((player) => predictions.some((item) => item.player_id === player.id)).length;
+
+  useEffect(() => {
+    setResultHome(match.home_score?.toString() ?? "");
+    setResultAway(match.away_score?.toString() ?? "");
+  }, [match.home_score, match.away_score]);
+
+  useEffect(() => {
+    const nextDrafts: Record<number, { home: string; away: string }> = {};
+    for (const prediction of predictions) {
+      nextDrafts[prediction.id] = {
+        home: prediction.home_score.toString(),
+        away: prediction.away_score.toString(),
+      };
+    }
+    setDrafts(nextDrafts);
+  }, [predictions]);
 
   return (
     <details className="history-row" open={open} onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}>
@@ -458,19 +764,72 @@ function HistoryMatch({ match, predictions, players }: { match: Match; predictio
             {match.home_team} - {match.away_team}
           </strong>
           <span>
-            {betCount}/{players.length} typow
+            📊 {betCount}/{players.length} typów
           </span>
         </div>
         <b>{result ? `${result.home}:${result.away}` : "brak wyniku"}</b>
       </summary>
+      <div className="history-tools">
+        <div className="result-form compact-result">
+          <span>Wynik meczu</span>
+          <input min="0" type="number" value={resultHome} onChange={(event) => setResultHome(event.target.value)} />
+          <span>:</span>
+          <input min="0" type="number" value={resultAway} onChange={(event) => setResultAway(event.target.value)} />
+          <button type="button" disabled={disabled} onClick={() => onResult(match.id, resultHome, resultAway)}>
+            Zapisz wynik
+          </button>
+        </div>
+        <button type="button" className="secondary-button danger-button" disabled={disabled} onClick={() => onCancelResult(match.id)}>
+          Anuluj zakończenie
+        </button>
+      </div>
       <div className="history-predictions">
         {players.map((player) => {
           const prediction = predictions.find((item) => item.player_id === player.id);
           const state = prediction && result ? getPredictionState(prediction, result) : "neutral";
+          const stateLabel = state === "exact" ? "✅ DOKŁADNY" : state === "outcome" ? "👍 TRAFIONY" : "❌ PUDŁO";
+          const draft = prediction ? drafts[prediction.id] ?? { home: "", away: "" } : { home: "", away: "" };
           return (
             <div key={player.id} className={`history-prediction ${state}`}>
               <strong>{player.name}</strong>
-              <span>{prediction ? `${prediction.home_score}:${prediction.away_score}` : "brak typu"}</span>
+              {prediction ? (
+                <div className="history-edit-form">
+                  <input
+                    min="0"
+                    type="number"
+                    value={draft.home}
+                    onChange={(event) =>
+                      setDrafts((current) => ({
+                        ...current,
+                        [prediction.id]: { ...(current[prediction.id] ?? { home: "", away: "" }), home: event.target.value },
+                      }))
+                    }
+                  />
+                  <span>:</span>
+                  <input
+                    min="0"
+                    type="number"
+                    value={draft.away}
+                    onChange={(event) =>
+                      setDrafts((current) => ({
+                        ...current,
+                        [prediction.id]: { ...(current[prediction.id] ?? { home: "", away: "" }), away: event.target.value },
+                      }))
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={disabled}
+                    onClick={() => onPredictionUpdate(prediction.id, draft.home, draft.away)}
+                  >
+                    Zapisz
+                  </button>
+                </div>
+              ) : (
+                <span>brak typu</span>
+              )}
+              {state !== "neutral" && <span className="state-label">{stateLabel}</span>}
             </div>
           );
         })}
@@ -572,7 +931,6 @@ function PasswordGate() {
   return (
     <div style={{ padding: 40, textAlign: "center" }}>
       <h2>Podaj hasło</h2>
-
       <input
         type="password"
         value={value}
@@ -581,10 +939,8 @@ function PasswordGate() {
           if (e.key === "Enter") submit();
         }}
       />
-
       <br />
       <br />
-
       <button onClick={submit}>Wejdź</button>
     </div>
   );

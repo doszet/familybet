@@ -39,6 +39,11 @@ async function ensureSchema(db: D1Database) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_predictions_match ON predictions(match_id)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_predictions_player ON predictions(player_id)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_matches_starts_at ON matches(starts_at)").run();
+
+  const matchColumns = await db.prepare("PRAGMA table_info(matches)").all<{ name: string }>();
+  if (!matchColumns.results.some((column) => column.name === "betting_deadline")) {
+    await db.prepare("ALTER TABLE matches ADD COLUMN betting_deadline TEXT").run();
+  }
 }
 
 async function readBody<T>(request: Request): Promise<T> {
@@ -91,15 +96,67 @@ async function updatePlayer(request: Request, db: D1Database, id: number) {
 }
 
 async function addMatch(request: Request, db: D1Database) {
-  const body = await readBody<{ home_team?: string; away_team?: string }>(request);
+  const body = await readBody<{
+    home_team?: string;
+    away_team?: string;
+    starts_at?: string | null;
+    betting_deadline?: string | null;
+  }>(request);
   const home = body.home_team?.trim();
   const away = body.away_team?.trim();
   if (!home || !away) return bad("Uzupelnij obie druzyny");
   await db
-    .prepare("INSERT INTO matches (home_team, away_team, starts_at) VALUES (?, ?, ?)")
-    .bind(home, away, new Date().toISOString())
+    .prepare("INSERT INTO matches (home_team, away_team, starts_at, betting_deadline) VALUES (?, ?, ?, ?)")
+    .bind(home, away, body.starts_at || new Date().toISOString(), body.betting_deadline || null)
     .run();
   return json({ ok: true }, 201);
+}
+
+async function recalculateMatchPoints(db: D1Database, matchId: number) {
+  const match = await db.prepare("SELECT status, home_score, away_score FROM matches WHERE id = ?").bind(matchId).first<{
+    status: string;
+    home_score: number | null;
+    away_score: number | null;
+  }>();
+  if (!match) return false;
+
+  const picks = await db.prepare("SELECT id, home_score, away_score FROM predictions WHERE match_id = ?").bind(matchId).all<{
+    id: number;
+    home_score: number;
+    away_score: number;
+  }>();
+  const updates = picks.results.map((pick) => {
+    const points =
+      match.status === "finished" ? pointsFor(pick.home_score, pick.away_score, match.home_score, match.away_score) : 0;
+    return db.prepare("UPDATE predictions SET points = ? WHERE id = ?").bind(points, pick.id);
+  });
+  if (updates.length) await db.batch(updates);
+  return true;
+}
+
+async function updateMatch(request: Request, db: D1Database, id: number) {
+  const body = await readBody<{
+    home_team?: string;
+    away_team?: string;
+    starts_at?: string | null;
+    betting_deadline?: string | null;
+  }>(request);
+  const home = body.home_team?.trim();
+  const away = body.away_team?.trim();
+  if (!home || !away) return bad("Uzupelnij obie druzyny");
+
+  const result = await db
+    .prepare("UPDATE matches SET home_team = ?, away_team = ?, starts_at = ?, betting_deadline = ? WHERE id = ?")
+    .bind(home, away, body.starts_at || new Date().toISOString(), body.betting_deadline || null, id)
+    .run();
+  if (!result.meta.changes) return bad("Nie znaleziono meczu", 404);
+  return json({ ok: true });
+}
+
+async function deleteMatch(db: D1Database, id: number) {
+  const result = await db.prepare("DELETE FROM matches WHERE id = ?").bind(id).run();
+  if (!result.meta.changes) return bad("Nie znaleziono meczu", 404);
+  return json({ ok: true });
 }
 
 async function savePrediction(request: Request, db: D1Database) {
@@ -133,6 +190,21 @@ async function savePrediction(request: Request, db: D1Database) {
   return json({ ok: true });
 }
 
+async function updatePrediction(request: Request, db: D1Database, id: number) {
+  const body = await readBody<{ home_score?: number; away_score?: number }>(request);
+  if (body.home_score === undefined || body.away_score === undefined) return bad("Podaj typowany wynik");
+
+  const prediction = await db.prepare("SELECT match_id FROM predictions WHERE id = ?").bind(id).first<{ match_id: number }>();
+  if (!prediction) return bad("Nie znaleziono typu", 404);
+
+  await db
+    .prepare("UPDATE predictions SET home_score = ?, away_score = ? WHERE id = ?")
+    .bind(body.home_score, body.away_score, id)
+    .run();
+  await recalculateMatchPoints(db, prediction.match_id);
+  return json({ ok: true });
+}
+
 async function saveResult(request: Request, db: D1Database, id: number) {
   const body = await readBody<{ home_score?: number; away_score?: number }>(request);
   if (body.home_score === undefined || body.away_score === undefined) return bad("Podaj wynik meczu");
@@ -142,17 +214,17 @@ async function saveResult(request: Request, db: D1Database, id: number) {
     .bind(body.home_score, body.away_score, id)
     .run();
 
-  const picks = await db.prepare("SELECT * FROM predictions WHERE match_id = ?").bind(id).all<{
-    id: number;
-    home_score: number;
-    away_score: number;
-  }>();
-  const updates = picks.results.map((pick) =>
-    db
-      .prepare("UPDATE predictions SET points = ? WHERE id = ?")
-      .bind(pointsFor(pick.home_score, pick.away_score, body.home_score!, body.away_score!), pick.id)
-  );
-  if (updates.length) await db.batch(updates);
+  await recalculateMatchPoints(db, id);
+  return json({ ok: true });
+}
+
+async function cancelResult(db: D1Database, id: number) {
+  const result = await db
+    .prepare("UPDATE matches SET home_score = NULL, away_score = NULL, status = 'scheduled' WHERE id = ?")
+    .bind(id)
+    .run();
+  if (!result.meta.changes) return bad("Nie znaleziono meczu", 404);
+  await recalculateMatchPoints(db, id);
   return json({ ok: true });
 }
 
@@ -179,6 +251,16 @@ export async function onRequest(context: Ctx) {
 
     const resultMatch = path.match(/^matches\/(\d+)\/result$/);
     if (method === "POST" && resultMatch) return saveResult(request, db, Number(resultMatch[1]));
+
+    const cancelMatch = path.match(/^matches\/(\d+)\/cancel-result$/);
+    if (method === "POST" && cancelMatch) return cancelResult(db, Number(cancelMatch[1]));
+
+    const matchMatch = path.match(/^matches\/(\d+)$/);
+    if (method === "PUT" && matchMatch) return updateMatch(request, db, Number(matchMatch[1]));
+    if (method === "DELETE" && matchMatch) return deleteMatch(db, Number(matchMatch[1]));
+
+    const predictionMatch = path.match(/^predictions\/(\d+)$/);
+    if (method === "PUT" && predictionMatch) return updatePrediction(request, db, Number(predictionMatch[1]));
 
     const playerMatch = path.match(/^players\/(\d+)$/);
     if (method === "PUT" && playerMatch) return updatePlayer(request, db, Number(playerMatch[1]));
