@@ -70,6 +70,7 @@ function App() {
   const [collapseUpcoming, setCollapseUpcoming] = useState(true);
   const [editingMatch, setEditingMatch] = useState<Match | null>(null);
   const [editingFinishedMatch, setEditingFinishedMatch] = useState<Match | null>(null);
+  const [showAllHistory, setShowAllHistory] = useState(false);
 
   async function load() {
     try {
@@ -90,7 +91,10 @@ function App() {
   }, []);
 
   const nextMatches = data.matches.filter((match) => match.status === "scheduled");
-  const finishedMatches = data.matches.filter((match) => match.status === "finished");
+  const finishedMatches = data.matches
+    .filter((match) => match.status === "finished")
+    .sort((a, b) => new Date(b.starts_at).getTime() - new Date(a.starts_at).getTime());
+  const visibleFinishedMatches = showAllHistory ? finishedMatches : finishedMatches.slice(0, 6);
 
   async function submitPlayer(event: FormEvent) {
     event.preventDefault();
@@ -279,7 +283,6 @@ function App() {
                 <th>Punkty</th>
                 <th>Dokladne</th>
                 <th>Trafione</th>
-                <th>Typy</th>
               </tr>
             </thead>
             <tbody>
@@ -290,7 +293,6 @@ function App() {
                   <td className="points">{row.points}</td>
                   <td>{row.exact_hits}</td>
                   <td>{row.outcome_hits}</td>
-                  <td>{row.predictions}</td>
                 </tr>
               ))}
             </tbody>
@@ -335,9 +337,18 @@ function App() {
             <h2>Historia</h2>
             <span>{finishedMatches.length} zakonczonych</span>
           </div>
+          {finishedMatches.length > 6 && (
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setShowAllHistory((current) => !current)}
+            >
+              {showAllHistory ? "Zwin do 6" : "Pokaz wszystkie"}
+            </button>
+          )}
         </div>
         <div className="history">
-          {finishedMatches.map((match) => (
+          {visibleFinishedMatches.map((match) => (
             <HistoryMatch
               key={match.id}
               match={match}
