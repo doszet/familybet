@@ -401,6 +401,21 @@ th {
   gap: 10px;
 }
 
+.manage-list {
+  display: grid;
+  gap: 8px;
+}
+
+.manage-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  border-radius: 10px;
+  background: #f8fbf9;
+  padding: 10px 12px;
+}
+
 .player-chip {
   display: flex;
   align-items: center;
@@ -416,6 +431,10 @@ th {
   background: #eef3f0;
   color: #1d2528;
   padding: 0.52rem 0.8rem;
+}
+
+.danger-button {
+  color: #9b1c1c;
 }
 
 .empty {
@@ -465,6 +484,11 @@ th {
   .inline-form.compact {
     width: 100%;
     grid-template-columns: 1fr auto;
+  }
+
+  .manage-row {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .match-summary,

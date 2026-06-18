@@ -71,6 +71,7 @@ function App() {
   const [editingMatch, setEditingMatch] = useState<Match | null>(null);
   const [editingFinishedMatch, setEditingFinishedMatch] = useState<Match | null>(null);
   const [showAllHistory, setShowAllHistory] = useState(false);
+  const [showMatchManager, setShowMatchManager] = useState(false);
 
   async function load() {
     try {
@@ -233,6 +234,20 @@ function App() {
     }
   }
 
+  async function deleteMatch(match: Match) {
+    if (!confirm(`Usunac mecz ${match.home_team} - ${match.away_team}?`)) return;
+    setBusy(true);
+    try {
+      await api(`matches/${match.id}`, { method: "DELETE" });
+      setMessage(`Usunieto mecz: ${match.home_team} - ${match.away_team}`);
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Blad usuwania");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="shell">
       <section className="hero">
@@ -379,6 +394,35 @@ function App() {
           ))}
           {!data.players.length && <p className="empty">Dodaj pierwszego zawodnika, zeby zaczac typowanie.</p>}
         </div>
+      </section>
+
+      <section className="panel">
+        <div className="section-head">
+          <div>
+            <h2>Edycja calosci</h2>
+            <span>Usuwanie niezakończonych meczow</span>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => setShowMatchManager((current) => !current)}
+          >
+            {showMatchManager ? "Zwin" : "Edytuj"}
+          </button>
+        </div>
+        {showMatchManager && (
+          <div className="manage-list">
+            {nextMatches.map((match) => (
+              <div key={match.id} className="manage-row">
+                <strong>{match.home_team} - {match.away_team}</strong>
+                <button type="button" className="secondary-button danger-button" disabled={busy} onClick={() => deleteMatch(match)}>
+                  Usun
+                </button>
+              </div>
+            ))}
+            {!nextMatches.length && <p className="empty">Brak niezakończonych meczow do usuniecia.</p>}
+          </div>
+        )}
       </section>
 
       {editingMatch && (
